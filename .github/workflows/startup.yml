@@ -1,0 +1,23 @@
+name: Startup Notice Bot
+
+on:
+  schedule:
+    - cron: '0 0 * * *'   # 매일 오전 9시 (한국시간)
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch startup notices
+        run: |
+          WEBHOOK_URL="https://discord.com/api/webhooks/1458104438039511138/GyqLr_wYx5RZzyouJELZNoj8kIDgGgNQ8EwxcxSXmRQtwmemQKYdSdqk8ERcwJZYTTbh"
+
+          html=$(curl -s -A "Mozilla/5.0" https://www.k-startup.go.kr/web/contents/bizpbanc-ongoing.do)
+
+          echo "$html" | grep -Eo 'pbancSn=[0-9]+' | head -n 5 | while read id; do
+            curl -X POST \
+              -H "Content-Type: application/json" \
+              -d "{\"content\":\"🔔 창업 공고 확인 👉 https://www.k-startup.go.kr/web/contents/bizpbanc-ongoing.do?$id\"}" \
+              $WEBHOOK_URL
+          done

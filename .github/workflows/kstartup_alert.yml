@@ -1,4 +1,4 @@
-name: K-Startup Final Custom Alert
+name: K-Startup Daily Alert Final
 
 on:
   schedule:
@@ -54,31 +54,29 @@ jobs:
                   title_tag = post.find('a')
                   if not title_tag: continue
                   
-                  # 1. 제목 추출 및 불필요 텍스트 제거
+                  # 1. 제목 추출 및 불필요 문구 제거
                   raw_title = title_tag.get_text(strip=True)
-                  clean_title = raw_title.replace('새로운게시글', '').replace('새창열기', '').strip()
+                  # 제목에서 '새로운게시글', '새창열기', 'N' 아이콘 텍스트 등 제거
+                  clean_title = re.sub(r'(새로운게시글|새창열기|N$)', '', raw_title).strip()
                   
                   if any(k in clean_title for k in keywords):
-                      # 2. 마감일 추출 (목록의 마감일자 텍스트 조준)
-                      date_text = '상세확인'
-                      # '마감일자' 텍스트 뒤의 날짜 패턴(202X-XX-XX) 검색
-                      full_text = post.get_text(strip=True)
+                      # 2. 사이트에 표시된 마감일자 형식 그대로 추출 (예: 2026-01-27)
+                      full_text = post.get_text(separator=' ', strip=True)
                       date_match = re.search(r'(\d{4}-\d{2}-\d{2})', full_text)
-                      if date_match:
-                          date_text = date_match.group(0).replace('-', '.')
+                      date_val = date_match.group(0) if date_match else '상세확인'
                       
-                      found_items.append({'title': clean_title, 'date': date_text})
+                      found_items.append({'title': clean_title, 'date': date_val})
 
-              # 3. 메시지 조립 (사용자 예시 포맷)
-              today = datetime.datetime.now().strftime('%Y-%m-%d')
+              # 3. 메시지 조립 (사용자 요청 포맷)
+              today = datetime.date.today().strftime('%Y-%m-%d')
               
               if not found_items:
-                  message = f'**[{today} 맞춤형 창업 지원 공고]**\n\n현재 모집 중인 주요 패키지 공고가 없습니다.'
+                  message = f'**[{today} 맞춤형 창업 지원 공고]**\n\n현재 모집 중인 관련 공고가 없습니다.'
               else:
                   message = f'**[{today} 맞춤형 창업 지원 공고]**\n\n'
                   for item in found_items:
                       message += f'📌 {item[\"title\"]}\n'
-                      message += f'마감일: {item[\"date\"]}\n\n'
+                      message += f'마감일자 {item[\"date\"]}\n\n'
                   
                   message += f'모집공고: {url}'
 

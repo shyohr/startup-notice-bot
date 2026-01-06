@@ -16,41 +16,40 @@ jobs:
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
-          # 1. 데이터 가져오기 (헤더 보강)
+          # 1. 데이터 가져오기
           URL="https://www.k-startup.go.kr/web/contents/bizpbanc-ongoing.do"
-          PAGE_DATA=$(curl -s -k -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36" "$URL")
+          PAGE_DATA=$(curl -s -k -L -A "Mozilla/5.0" "$URL")
 
           # 2. 키워드 필터링 및 데이터 추출
-          # 제목과 날짜를 추출하여 임시 파일에 저장
           KEYWORDS="예비창업패키지|초기창업패키지|창업도약패키지|창업패키지|청년창업사관학교"
           
-          # 공고 제목과 마감일을 한 쌍으로 추출
+          # 제목과 날짜 정보를 한 쌍으로 추출하여 줄바꿈 정리
           RAW_DATA=$(echo "$PAGE_DATA" | grep -oP "title=\"[^\"]*($KEYWORDS)[^\"]*\"|<span>~ '[0-9]{2}\.[0-9]{2}\.[0-9]{2}\." | sed "s/title=\"//;s/\"//;s/<span>//")
 
-          # 3. 메시지 빌드
-          FINAL_LIST=""
+          # 3. 메시지 본문 생성
+          FINAL_CONTENT=""
           while read -r title; do
             read -r dday
             if [[ ! -z "$title" && ! -z "$dday" ]]; then
-              # 한 공고당 깔끔하게 박스 형태로 구성
-              FINAL_LIST="${FINAL_LIST}━━━━━━━━━━━━━━━━━━\n"
-              FINAL_LIST="${FINAL_LIST}📌 **$title**\n"
-              FINAL_LIST="${FINAL_LIST}📅 마감일 : \`$dday\`\n"
-              FINAL_LIST="${FINAL_LIST}🔗 [공고 상세보기]($URL)\n\n"
+              # 항목별 가독성 높은 레이아웃 구성
+              ITEM="### 📌 $title\n- 📅 **마감일**: \`$dday\`\n- 🔗 [공고 상세보기]($URL)\n\n"
+              FINAL_CONTENT="${FINAL_CONTENT}${ITEM}"
             fi
           done <<< "$RAW_DATA"
 
-          # 4. 최종 메시지 구성 (불필요한 공백 제거)
+          # 4. 최종 메시지 조립 (줄바꿈 오류 방지)
           DATE=$(date +'%Y-%m-%d')
-          if [ -z "$FINAL_LIST" ]; then
-            CONTENT="📅 **$DATE 알림**\n현재 모집 중인 핵심 패키지 공고가 없습니다."
+          if [ -z "$FINAL_CONTENT" ]; then
+            PAYLOAD_JSON=$(jq -n --arg msg "📅 **$DATE 알림**\n현재 모집 중인 핵심 패키지 공고가 없습니다." '{content: $msg}')
           else
-            CONTENT="🚀 **$DATE 맞춤형 창업 지원 공고**\n\n$FINAL_LIST"
+            HEADER="🚀 **$DATE 맞춤형 창업 지원 공고**\n"
+            DIVIDER="━━━━━━━━━━━━━━━━━━\n\n"
+            FULL_MESSAGE="${HEADER}${DIVIDER}${FINAL_CONTENT}"
+            # jq를 사용하여 전체 메시지를 안전하게 JSON화
+            PAYLOAD_JSON=$(jq -n --arg msg "$FULL_MESSAGE" '{content: $msg}')
           fi
 
-          # 5. 전송 (jq를 사용하여 JSON 이스케이프 완벽 처리)
-          # 공백과 줄바꿈 오류를 방지하기 위해 -Rs 옵션 사용
-          echo "$CONTENT" | jq -Rs '{content: .}' | \
+          # 5. 전송
           curl -X POST "$DISCORD_WEBHOOK" \
                -H "Content-Type: application/json" \
-               -d @-
+               -d "$PAYLOAD_JSON"

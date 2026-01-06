@@ -1,12 +1,12 @@
-name: K-Startup Status Check
+name: K-Startup Final Fix
 
 on:
   schedule:
-    - cron: '0 0 * * *' # 한국 시간 오전 9시
+    - cron: '0 0 * * *' # 매일 오전 9시
   workflow_dispatch:
 
 jobs:
-  check-and-report:
+  build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -18,10 +18,9 @@ jobs:
           python-version: '3.9'
 
       - name: Install Dependencies
-        run: |
-          pip install requests beautifulsoup4 urllib3
+        run: pip install requests beautifulsoup4
 
-      - name: Run Scraper
+      - name: Scrape and Notify
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
@@ -31,98 +30,65 @@ jobs:
           import os
           import json
           import datetime
-          import re
-          import urllib3
 
-          # SSL 경고 무시 설정 (정부 사이트 접속 시 필수)
-          urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-          # 1. 설정
-          url = 'https://www.k-startup.go.kr/web/contents/bizpbanc-ongoing.do'
-          webhook_url = os.environ.get('DISCORD_WEBHOOK')
-          
-          if not webhook_url:
-              print('Error: Webhook URL is missing')
-              exit(1)
-
-          headers = {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-          }
-          
-          keywords = ['예비창업패키지', '초기창업패키지', '창업도약패키지', '창업패키지', '청년창업사관학교']
-
-          def send_discord(content):
-              payload = {'content': content}
-              try:
-                  res = requests.post(webhook_url, json=payload)
-                  print(f'Discord Response: {res.status_code}')
-              except Exception as e:
-                  print(f'Discord Send Error: {e}')
+          def send_discord(text):
+              webhook_url = os.environ.get('DISCORD_WEBHOOK')
+              # JSON 전송 시 줄바꿈 오류를 방지하기 위해 json.dumps 사용
+              payload = json.dumps({'content': text}, ensure_ascii=False)
+              headers = {'Content-Type': 'application/json'}
+              requests.post(webhook_url, data=payload.encode('utf-8'))
 
           try:
-              print('Connecting to K-Startup...')
-              response = requests.get(url, headers=headers, verify=False, timeout=30)
-              soup = BeautifulSoup(response.text, 'html.parser')
+              url = 'https://www.k-startup.go.kr/web/contents/bizpbanc-ongoing.do'
+              headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
               
-              # PC버전 리스트 구조 (.pbancList > ul > li)
-              items = soup.select('div.pbancList > ul > li')
-              # 모바일/반응형 구조 대비 (.list_type_common > li)
-              if not items:
-                  items = soup.select('ul > li')
+              # 1. 데이터 가져오기 (세션 유지 및 타임아웃 보강)
+              res = requests.get(url, headers=headers, timeout=30)
+              soup = BeautifulSoup(res.text, 'html.parser')
               
-              results = []
-              print(f'Found {len(items)} items. Scanning for keywords...')
+              # 2. 카드형 UI (.announcement_list 또는 li.item) 조준
+              # 카드 한 장 한 장을 의미하는 태그를 찾습니다.
+              posts = soup.find_all('li')
               
-              for item in items:
-                  full_text = item.get_text(strip=True)
-                  link_tag = item.find('a')
-                  
-                  if not link_tag: continue
-                  
-                  title = link_tag.get_text(strip=True)
-                  # 제목이나 내용에 키워드가 있는지 확인
-                  if any(k in title for k in keywords):
-                      # 날짜 추출 (~ 2025.xx.xx 패턴)
-                      dday = '마감일 확인 필요'
-                      date_match = re.search(r'~\s*(\'|20)?(\d{2}\.\d{2}\.\d{2})', full_text)
-                      if date_match:
-                          dday = date_match.group(0).replace('~', '').strip()
-                      
-                      # 링크 및 고유번호(sn) 추출
-                      href = link_tag.get('href', '')
-                      onclick = link_tag.get('onclick', '')
-                      sn = ''
-                      
-                      sn_match = re.search(r'pbancSn=(\d+)', href)
-                      if not sn_match:
-                          sn_match = re.search(r'(\d{4,})', onclick)
-                      
-                      if sn_match:
-                          sn = sn_match.group(1)
-                          link = f'https://www.k-startup.go.kr/web/contents/bizpbanc-ongoing.do?schMnuId=S010101&pbancSn={sn}'
-                          
-                          results.append({'title': title, 'date': dday, 'link': link})
+              keywords = ['예비창업', '초기창업', '창업도약', '패키지', '청년창업사관학교']
+              found = []
 
-              # 결과 전송 로직
+              for post in posts:
+                  title_tag = post.find('h4') or post.find('strong') or post.find('p', class_='title')
+                  if not title_tag:
+                      # a 태그 안에 제목이 있는 경우
+                      title_tag = post.find('a', title=True)
+                  
+                  if title_tag:
+                      title = title_tag.get_text(strip=True)
+                      if any(k in title for k in keywords):
+                          # 마감일 추출
+                          date_text = post.find('span', class_='date') or post.find('li', class_='date')
+                          d_day = date_text.get_text(strip=True) if date_text else '상세확인'
+                          
+                          # 링크 추출
+                          link_tag = post.find('a')
+                          href = link_tag.get('href', '#') if link_tag else '#'
+                          # 상세번호 추출 로직
+                          import re
+                          sn_match = re.search(r'pbancSn=(\d+)', href)
+                          if sn_match:
+                              final_url = f'https://www.k-startup.go.kr/web/contents/bizpbanc-ongoing.do?schMnuId=S010101&pbancSn={sn_match.group(1)}'
+                          else:
+                              final_url = url
+                          
+                          found.append(f'📌 **{title}**\n📅 마감: `{d_day}`\n🔗 [바로가기]({final_url})')
+
+              # 3. 메시지 조립
               today = datetime.datetime.now().strftime('%Y-%m-%d')
-              
-              if not results:
-                  # 공고가 없어도 무조건 메시지 전송 (생존 신고)
-                  msg = f'📅 **{today} K-Startup 상태 보고**\n\n현재 지정하신 키워드({", ".join(keywords)})에 해당하는 모집 중인 공고가 없습니다.\n(시스템은 정상 작동 중입니다)'
-                  print('No matching announcements found. Sending status report.')
-                  send_discord(msg)
+              if not found:
+                  msg = f'📅 **{today} 알림**\n현재 조건에 맞는 모집 중인 공고가 없습니다.'
               else:
-                  msg = f'🚀 **{today} 맞춤형 창업 공고 발견!**\n'
-                  msg += f'━━━━━━━━━━━━━━━━━━\n\n'
-                  for res in results:
-                      msg += f'### 📌 {res[\"title\"]}\n'
-                      msg += f'- 📅 **마감일**: `{res[\"date\"]}`\n'
-                      msg += f'- 🔗 [상세공고 바로가기]({res[\"link\"]})\n\n'
-                  print(f'Found {len(results)} announcements. Sending alert.')
-                  send_discord(msg)
+                  # 실제 줄바꿈을 문자로 넣지 않고 리스트로 관리하여 합침
+                  msg = f'🚀 **{today} 맞춤형 창업 공고**\n' + '\n'.join(found)
+
+              send_discord(msg)
 
           except Exception as e:
-              err_msg = f'⚠️ **스크립트 에러 발생**\n\n{str(e)}'
-              print(f'Error: {e}')
-              send_discord(err_msg)
+              send_discord(f'⚠️ 오류 발생: {str(e)}')
           "

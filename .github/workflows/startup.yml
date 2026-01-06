@@ -1,4 +1,4 @@
-name: K-Startup Precise Alert
+name: K-Startup Daily Ultimate Alert
 
 on:
   schedule:
@@ -16,42 +16,44 @@ jobs:
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
-          # 1. 데이터 수집 (브라우저처럼 위장하여 차단 방지)
+          # 1. 데이터 수집 (최신 브라우저 헤더 적용)
           TARGET_URL="https://www.k-startup.go.kr/web/contents/bizpbanc-ongoing.do"
-          PAGE_DATA=$(curl -s -k -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36" "$TARGET_URL")
+          PAGE_DATA=$(curl -s -k -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" "$TARGET_URL")
 
           # 2. 키워드 설정
           KEYWORDS="예비창업패키지|초기창업패키지|창업도약패키지|창업패키지|청년창업사관학교"
-          
-          # 3. 데이터 파싱 (제목, 날짜, 고유번호를 탭으로 구분하여 추출)
-          # grep과 perl을 사용하여 한 개의 <li> 태그 안에서 정보를 묶어서 가져옵니다.
-          RAW_LIST=$(echo "$PAGE_DATA" | grep -zPo '(?s)<li class="item">.*?</li>' | tr -d '\n' | sed 's/<\/li>/\n/g' | \
+
+          # 3. 데이터 파싱 (아이템별로 분리하여 정확하게 매칭)
+          # 각 리스트 아이템(li)을 추출하여 제목, 날짜, 고유번호를 탭으로 구분
+          RAW_LIST=$(echo "$PAGE_DATA" | grep -zPo '(?s)<li class="item">.*?</li>' | tr -d '\n\r' | sed 's/<\/li>/\n/g' | \
           grep -E "$KEYWORDS" | \
           perl -lne 'print "$1\t$2\t$3" if /title="([^"]*)".*?<span>~ ([^<]*)<\/span>.*?pbancSn=(\d+)/')
 
-          # 4. 메시지 본문 구성
-          FINAL_MSG=""
-          while IFS=$'\t' read -r title dday sn; do
-            if [[ ! -z "$title" ]]; then
-              # 개별 상세페이지 링크 생성
-              DETAIL_URL="https://www.k-startup.go.kr/web/contents/bizpbanc-ongoing.do?schMnuId=S010101&pbancSn=$sn"
-              
-              ITEM="### 📌 $title\n- 📅 **마감일**: \`$dday\`\n- 🔗 [상세공고 바로가기]($DETAIL_URL)\n"
-              FINAL_MSG="${FINAL_MSG}${ITEM}━━━━━━━━━━━━━━━━━━\n"
-            fi
-          done <<< "$RAW_LIST"
-
-          # 5. 최종 메시지 조립 및 전송
+          # 4. 메시지 빌드 (내용이 있을 때만 레이아웃 생성)
           DATE=$(date +'%Y-%m-%d')
-          if [ -z "$FINAL_MSG" ]; then
-            MESSAGE="📅 **$DATE 알림**\n현재 키워드에 해당하는 모집 중인 공고가 없습니다."
+          
+          if [ -z "$RAW_LIST" ]; then
+            MESSAGE="📅 **$DATE 알림**\n현재 모집 중인 관련 핵심 공고가 없습니다."
           else
-            HEADER="🚀 **$DATE 맞춤형 창업 지원 공고**\n\n"
-            MESSAGE="${HEADER}${FINAL_MSG}"
+            # 메시지 상단 헤더
+            MESSAGE="🚀 **$DATE 맞춤형 창업 지원 공고**\n"
+            MESSAGE="${MESSAGE}━━━━━━━━━━━━━━━━━━\n\n"
+            
+            # 리스트를 돌며 개별 항목 추가
+            while IFS=$'\t' read -r title dday sn; do
+              if [[ ! -z "$title" ]]; then
+                DETAIL_URL="https://www.k-startup.go.kr/web/contents/bizpbanc-ongoing.do?schMnuId=S010101&pbancSn=$sn"
+                MESSAGE="${MESSAGE}📌 **$title**\n"
+                MESSAGE="${MESSAGE}📅 마감일: \`$dday\`\n"
+                MESSAGE="${MESSAGE}🔗 [상세공고 바로가기]($DETAIL_URL)\n\n"
+              fi
+            done <<< "$RAW_LIST"
           fi
 
-          # jq를 사용하여 JSON 이스케이프를 처리함으로써 \n 글자 노출 에러 차단
-          jq -n --arg msg "$MESSAGE" '{content: $msg}' | \
+          # 5. 디스코드 전송 (jq를 사용하여 JSON 이스케이프 및 \n 문자 오류 해결)
+          # printf를 사용하여 변수 내의 줄바꿈을 실제 줄바꿈으로 전달
+          PAYLOAD=$(printf '%s' "$MESSAGE" | jq -Rs '{content: .}')
+          
           curl -X POST "$DISCORD_WEBHOOK" \
                -H "Content-Type: application/json" \
-               -d @-
+               -d "$PAYLOAD"

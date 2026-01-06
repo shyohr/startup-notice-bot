@@ -1,4 +1,4 @@
-name: K-Startup Daily Custom Alert
+name: K-Startup Final Custom Alert
 
 on:
   schedule:
@@ -34,7 +34,6 @@ jobs:
 
           def send_discord(text):
               webhook_url = os.environ.get('DISCORD_WEBHOOK')
-              # json.dumps를 사용하여 \n 글자 노출 문제를 원천 차단합니다.
               payload = json.dumps({'content': text}, ensure_ascii=False)
               requests.post(webhook_url, data=payload.encode('utf-8'), headers={'Content-Type': 'application/json'})
 
@@ -45,7 +44,7 @@ jobs:
               res = requests.get(url, headers=headers, timeout=30, verify=False)
               soup = BeautifulSoup(res.text, 'html.parser')
               
-              # 카드형 UI 및 리스트형 UI 모두 대응 가능한 선택자
+              # 카드형 UI 리스트 아이템 추출
               posts = soup.select('div.pbancList > ul > li') or soup.select('ul > li')
               
               keywords = ['예비창업패키지', '초기창업패키지', '창업도약패키지', '창업패키지', '청년창업사관학교']
@@ -55,42 +54,33 @@ jobs:
                   title_tag = post.find('a')
                   if not title_tag: continue
                   
-                  title = title_tag.get_text(strip=True)
+                  # 1. 제목 추출 및 불필요 텍스트 제거
+                  raw_title = title_tag.get_text(strip=True)
+                  clean_title = raw_title.replace('새로운게시글', '').replace('새창열기', '').strip()
                   
-                  # 키워드 매칭 확인
-                  if any(k in title for k in keywords):
-                      # 마감일 추출 (날짜 형식 0000-00-00 또는 00.00.00 탐색)
-                      date_text = '상세공고 참조'
+                  if any(k in clean_title for k in keywords):
+                      # 2. 마감일 추출 (목록의 마감일자 텍스트 조준)
+                      date_text = '상세확인'
+                      # '마감일자' 텍스트 뒤의 날짜 패턴(202X-XX-XX) 검색
                       full_text = post.get_text(strip=True)
-                      date_match = re.search(r'(\d{4}-\d{2}-\d{2})|(\d{2}\.\d{2}\.\d{2})', full_text)
+                      date_match = re.search(r'(\d{4}-\d{2}-\d{2})', full_text)
                       if date_match:
-                          date_text = date_match.group(0)
+                          date_text = date_match.group(0).replace('-', '.')
                       
-                      # 고유 번호를 통한 상세 페이지 링크 생성
-                      sn_match = re.search(r'pbancSn=(\d+)', title_tag.get('href', '') + title_tag.get('onclick', ''))
-                      if sn_match:
-                          link = f'https://www.k-startup.go.kr/web/contents/bizpbanc-ongoing.do?schMnuId=S010101&pbancSn={sn_match.group(1)}'
-                      else:
-                          link = url
-                      
-                      found_items.append({
-                          'title': title,
-                          'date': date_text,
-                          'link': link
-                      })
+                      found_items.append({'title': clean_title, 'date': date_text})
 
+              # 3. 메시지 조립 (사용자 예시 포맷)
               today = datetime.datetime.now().strftime('%Y-%m-%d')
               
               if not found_items:
-                  # 공고가 없을 경우 생존 신고용 메시지
-                  message = f'📅 **[{today} 맞춤형 창업 지원 공고]**\n\n현재 모집 중인 주요 키워드 공고가 없습니다.'
+                  message = f'**[{today} 맞춤형 창업 지원 공고]**\n\n현재 모집 중인 주요 패키지 공고가 없습니다.'
               else:
-                  # 요청하신 예시 포맷 그대로 구성
                   message = f'**[{today} 맞춤형 창업 지원 공고]**\n\n'
                   for item in found_items:
                       message += f'📌 {item[\"title\"]}\n'
-                      message += f'마감일: {item[\"date\"]}\n'
-                      message += f'모집공고: {item[\"link\"]}\n\n'
+                      message += f'마감일: {item[\"date\"]}\n\n'
+                  
+                  message += f'모집공고: {url}'
 
               send_discord(message)
 

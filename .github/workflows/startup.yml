@@ -2,7 +2,7 @@ name: Startup Notice Bot
 
 on:
   schedule:
-    - cron: '0 0 * * *'   # 매일 오전 9시 (한국시간)
+    - cron: '0 0 * * *'   # 매일 오전 9시 (KST)
   workflow_dispatch:
 
 jobs:
@@ -13,11 +13,18 @@ jobs:
         run: |
           WEBHOOK_URL="https://discord.com/api/webhooks/1458104438039511138/GyqLr_wYx5RZzyouJELZNoj8kIDgGgNQ8EwxcxSXmRQtwmemQKYdSdqk8ERcwJZYTTbh"
 
-          html=$(curl -s -A "Mozilla/5.0" https://www.k-startup.go.kr/web/contents/bizpbanc-ongoing.do)
+          PAGE=$(curl -L -A "Mozilla/5.0" https://www.k-startup.go.kr/web/contents/bizpbanc-ongoing.do)
 
-          echo "$html" | grep -Eo 'pbancSn=[0-9]+' | head -n 5 | while read id; do
-            curl -X POST \
-              -H "Content-Type: application/json" \
-              -d "{\"content\":\"🔔 창업 공고 확인 👉 https://www.k-startup.go.kr/web/contents/bizpbanc-ongoing.do?$id\"}" \
-              $WEBHOOK_URL
-          done
+          KEYWORDS="도약|패키지|예비|초기|청년|사관학교"
+
+          MATCHES=$(echo "$PAGE" | grep -E "$KEYWORDS" | grep "모집" | head -n 5)
+
+          if [ -z "$MATCHES" ]; then
+            MESSAGE="📢 오늘 기준 모집중인 핵심 창업·예비창업 공고 요약\n\n⚠️ 키워드 기준으로 확인된 공고가 없습니다."
+          else
+            MESSAGE="📢 오늘 기준 모집중인 핵심 창업·예비창업 공고 요약\n\n$(echo "$MATCHES" | sed 's/<[^>]*>//g')"
+          fi
+
+          curl -X POST "$WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "{\"content\":\"$MESSAGE\"}"

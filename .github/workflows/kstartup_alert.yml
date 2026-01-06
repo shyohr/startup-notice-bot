@@ -1,8 +1,8 @@
-name: K-Startup Daily Alert Final
+name: K-Startup Final Precision Alert
 
 on:
   schedule:
-    - cron: '0 0 * * *' # 한국 시간 매일 오전 9시
+    - cron: '0 0 * * *'
   workflow_dispatch:
 
 jobs:
@@ -44,30 +44,37 @@ jobs:
               res = requests.get(url, headers=headers, timeout=30, verify=False)
               soup = BeautifulSoup(res.text, 'html.parser')
               
-              # 카드형 UI 리스트 아이템 추출
-              posts = soup.select('div.pbancList > ul > li') or soup.select('ul > li')
+              # 카드형 리스트 아이템 추출
+              posts = soup.select('div.pbancList > ul > li') or soup.select('ul.list_type_common > li')
               
               keywords = ['예비창업패키지', '초기창업패키지', '창업도약패키지', '창업패키지', '청년창업사관학교']
               found_items = []
 
               for post in posts:
+                  # 1. 제목 추출 및 정제
                   title_tag = post.find('a')
                   if not title_tag: continue
-                  
-                  # 1. 제목 추출 및 불필요 문구 제거
                   raw_title = title_tag.get_text(strip=True)
-                  # 제목에서 '새로운게시글', '새창열기', 'N' 아이콘 텍스트 등 제거
-                  clean_title = re.sub(r'(새로운게시글|새창열기|N$)', '', raw_title).strip()
+                  # '새로운게시글', '새창열기' 및 아이콘 텍스트 제거
+                  clean_title = re.sub(r'(새로운게시글|새창열기|N$|NEW$)', '', raw_title).strip()
                   
                   if any(k in clean_title for k in keywords):
-                      # 2. 사이트에 표시된 마감일자 형식 그대로 추출 (예: 2026-01-27)
-                      full_text = post.get_text(separator=' ', strip=True)
-                      date_match = re.search(r'(\d{4}-\d{2}-\d{2})', full_text)
-                      date_val = date_match.group(0) if date_match else '상세확인'
+                      # 2. 마감일자 정밀 추출
+                      # 스크린샷의 '마감일자 2026-01-27' 패턴을 찾음
+                      full_text = post.get_text(' ', strip=True)
+                      # '마감일자' 단어 뒤에 오는 날짜(YYYY-MM-DD)를 특정해서 추출
+                      date_match = re.search(r'마감일자\s*(\d{4}-\d{2}-\d{2})', full_text)
+                      
+                      if date_match:
+                          date_val = date_match.group(1) # 찾은 날짜 그대로 사용
+                      else:
+                          # 패턴이 안 보일 경우 일반 날짜 형식이라도 검색
+                          simple_match = re.search(r'(\d{4}-\d{2}-\d{2})', full_text)
+                          date_val = simple_match.group(0) if simple_match else '기간상세참조'
                       
                       found_items.append({'title': clean_title, 'date': date_val})
 
-              # 3. 메시지 조립 (사용자 요청 포맷)
+              # 3. 메시지 조립
               today = datetime.date.today().strftime('%Y-%m-%d')
               
               if not found_items:

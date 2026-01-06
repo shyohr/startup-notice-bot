@@ -1,20 +1,46 @@
-run: |
-  WEBHOOK_URL="https://discord.com/api/webhooks/1458104438039511138/GyqLr_wYx5RZzyouJELZNoj8kIDgGgNQ8EwxcxSXmRQtwmemQKYdSdqk8ERcwJZYTTbh"
+name: K-Startup Daily Morning Alert
 
-  PAGE=$(curl -L -A "Mozilla/5.0" https://www.k-startup.go.kr/web/contents/bizpbanc-ongoing.do)
+on:
+  schedule:
+    # 한국 시간 기준 매일 오전 9시 (UTC 00:00)
+    - cron: '0 0 * * *'
+  workflow_dispatch: # 필요할 때 수동으로 버튼 눌러 실행 가능
 
-  KEYWORDS="도약|패키지|예비|초기|청년|사관학교"
+jobs:
+  scan-and-notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
 
-  MATCHES=$(echo "$PAGE" | grep -E "$KEYWORDS" | grep "모집" | head -n 5 | sed 's/<[^>]*>//g')
+      - name: Scan K-Startup and Send Discord
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          # 1. 공고 페이지 데이터 가져오기 (User-Agent를 넣어야 차단되지 않음)
+          PAGE_DATA=$(curl -s -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36" \
+            "https://www.k-startup.go.kr/web/contents/bizpbanc-ongoing.do")
 
-  if [ -z "$MATCHES" ]; then
-    MESSAGE="📢 오늘 기준 모집중인 핵심 창업·예비창업 공고 요약\n\n⚠️ 키워드 기준 공고 없음\n\nhttps://www.k-startup.go.kr"
-  else
-    MESSAGE="📢 오늘 기준 모집중인 핵심 창업·예비창업 공고 요약\n\n$MATCHES\n\nhttps://www.k-startup.go.kr"
-  fi
+          # 2. 핵심 키워드 설정 (사용자님 관심사 반영)
+          KEYWORDS="예비|패키지|청년|사관학교|도약|희망리턴|경영개선"
 
-  PAYLOAD=$(jq -n --arg content "$MESSAGE" '{content: $content}')
+          # 3. HTML에서 공고 제목 부분만 추출 (정규식 활용)
+          # title 속성에 들어있는 텍스트를 추출하여 키워드 매칭
+          MATCHES=$(echo "$PAGE_DATA" | grep -oP 'title="[^"]*(?:'"$KEYWORDS"')[^"]*"' | sed 's/title="//;s/"//' | head -n 8)
 
-  curl -X POST "$WEBHOOK_URL" \
-    -H "Content-Type: application/json" \
-    -d "$PAYLOAD"
+          # 4. 디스코드 메시지 조립
+          DATE=$(date +'%Y-%m-%d')
+          
+          if [ -z "$MATCHES" ]; then
+            CONTENT="📅 **$DATE K-Startup 공고 요약**\n\n현재 설정한 키워드(`$KEYWORDS`)에 맞는 새로운 공고가 없습니다. 직접 확인해보세요! 🔍"
+          else
+            # 목록을 보기 좋게 불렛 포인트로 정리
+            LIST_ITEMS=$(echo "$MATCHES" | sed 's/^/- /')
+            CONTENT="📢 **$DATE 핵심 창업·예비창업 공고 알림**\n\n현재 모집 중인 주요 사업입니다:\n\n$LIST_ITEMS\n\n🔗 [K-Startup 바로가기](https://www.k-startup.go.kr/web/contents/bizpbanc-ongoing.do)"
+          fi
+
+          # 5. JSON 페이로드 생성 및 디스코드 전송
+          jq -n --arg msg "$CONTENT" '{content: $msg}' | \
+          curl -X POST "$DISCORD_WEBHOOK" \
+            -H "Content-Type: application/json" \
+            -d @-

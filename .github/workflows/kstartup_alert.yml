@@ -1,0 +1,124 @@
+name: K-Startup Python Alert
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # 한국 시간 오전 9시
+  workflow_dispatch:
+
+jobs:
+  scan-and-notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install Dependencies
+        run: |
+          pip install requests beautifulsoup4
+
+      - name: Run Scraper & Send Notification
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          python -c "
+          import requests
+          from bs4 import BeautifulSoup
+          import os
+          import json
+          import datetime
+          import re
+
+          # 1. 설정 및 헤더 (브라우저 위장)
+          url = 'https://www.k-startup.go.kr/web/contents/bizpbanc-ongoing.do'
+          webhook_url = os.environ.get('DISCORD_WEBHOOK')
+          headers = {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+              'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7'
+          }
+          
+          # 2. 키워드 설정 (정규식으로 유연하게 매칭)
+          keywords = ['예비창업패키지', '초기창업패키지', '창업도약패키지', '창업패키지', '청년창업사관학교']
+          
+          try:
+              response = requests.get(url, headers=headers, verify=False, timeout=15)
+              response.encoding = 'utf-8' # 한글 깨짐 방지
+              soup = BeautifulSoup(response.text, 'html.parser')
+              
+              # 3. 공고 리스트 파싱
+              # K-Startup의 일반적인 리스트 구조 (.item 클래스 또는 ul > li 구조 탐색)
+              items = soup.select('ul > li') 
+              
+              found_list = []
+              
+              for item in items:
+                  text_content = item.get_text()
+                  
+                  # 키워드가 포함된 항목인지 확인
+                  if any(k in text_content for k in keywords):
+                      # 제목 추출 (title 속성 혹은 텍스트)
+                      title_tag = item.find('a')
+                      if not title_tag: continue
+                      
+                      # 제목 정제
+                      title = title_tag.get_text(strip=True)
+                      # 혹시 title 속성에 더 정확한 정보가 있다면 사용
+                      if title_tag.get('title'):
+                          title = title_tag['title']
+
+                      # 마감일 추출 (보통 span 태그 등에 ~ '25.01.01 형태)
+                      date_text = '날짜 정보 없음'
+                      date_match = re.search(r'~\s*\'?(\d{2}\.\d{2}\.\d{2})', text_content)
+                      if date_match:
+                          date_text = date_match.group(1) # 25.01.01 형태로 추출
+                      
+                      # 링크 추출 (pbancSn 파라미터 찾기)
+                      link = url
+                      href = title_tag.get('href', '')
+                      sn_match = re.search(r'pbancSn=(\d+)', href)
+                      if sn_match:
+                          sn = sn_match.group(1)
+                          link = f'https://www.k-startup.go.kr/web/contents/bizpbanc-ongoing.do?schMnuId=S010101&pbancSn={sn}'
+                      elif 'javascript' in href:
+                           # 자바스크립트 링크일 경우 onclick 속성에서 추출 시도
+                           onclick = title_tag.get('onclick', '')
+                           sn_match_js = re.search(r'(\d{4,})', onclick) # 4자리 이상 숫자
+                           if sn_match_js:
+                               link = f'https://www.k-startup.go.kr/web/contents/bizpbanc-ongoing.do?schMnuId=S010101&pbancSn={sn_match_js.group(1)}'
+
+                      # 중복 방지 및 결과 저장
+                      found_list.append({
+                          'title': title,
+                          'date': date_text,
+                          'link': link
+                      })
+
+              # 4. 디스코드 메시지 생성
+              today = datetime.datetime.now().strftime('%Y-%m-%d')
+              
+              if not found_list:
+                  content = f'📅 **{today} 알림**\n\n현재 모집 중인 관련 핵심 패키지 공고가 없습니다.\n(페이지 파싱 성공했으나 키워드 매칭 없음)'
+              else:
+                  content = f'🚀 **{today} 맞춤형 창업 지원 공고**\n\n'
+                  for item in found_list:
+                      content += f'━━━━━━━━━━━━━━━━━━\n'
+                      content += f'### 📌 {item[\"title\"]}\n'
+                      content += f'- 📅 **마감일**: `{item[\"date\"]}`\n'
+                      content += f'- 🔗 [상세공고 바로가기]({item[\"link\"]})\n\n'
+
+              # 5. 전송
+              payload = {'content': content}
+              requests.post(webhook_url, json=payload)
+              print('Discord notification sent successfully.')
+
+          except Exception as e:
+              # 에러 발생 시 디스코드로 에러 로그 전송 (디버깅용)
+              err_msg = f'⚠️ **스크립트 에러 발생**\n\n{str(e)}'
+              requests.post(webhook_url, json={'content': err_msg})
+              print(f'Error: {e}')
+          "

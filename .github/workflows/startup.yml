@@ -16,24 +16,24 @@ jobs:
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
-          # 1. 데이터 수집 (차단 방지를 위해 브라우저처럼 위장)
-          LIST_URL="https://www.k-startup.go.kr/web/contents/bizpbanc-ongoing.do"
-          PAGE_DATA=$(curl -s -k -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36" "$LIST_URL")
+          # 1. 데이터 수집 (브라우저처럼 위장하여 차단 방지)
+          TARGET_URL="https://www.k-startup.go.kr/web/contents/bizpbanc-ongoing.do"
+          PAGE_DATA=$(curl -s -k -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36" "$TARGET_URL")
 
-          # 2. 키워드 필터링 및 데이터 추출 (제목, 마감일, 상세번호 추출)
-          # K-Startup은 pbancSn이라는 고유번호로 상세페이지 링크를 만듭니다.
+          # 2. 키워드 설정
           KEYWORDS="예비창업패키지|초기창업패키지|창업도약패키지|창업패키지|청년창업사관학교"
           
-          # 제목, 마감일, 상세번호를 탭(\t)으로 구분하여 한 줄씩 정리
+          # 3. 데이터 파싱 (제목, 날짜, 고유번호를 탭으로 구분하여 추출)
+          # grep과 perl을 사용하여 한 개의 <li> 태그 안에서 정보를 묶어서 가져옵니다.
           RAW_LIST=$(echo "$PAGE_DATA" | grep -zPo '(?s)<li class="item">.*?</li>' | tr -d '\n' | sed 's/<\/li>/\n/g' | \
           grep -E "$KEYWORDS" | \
           perl -lne 'print "$1\t$2\t$3" if /title="([^"]*)".*?<span>~ ([^<]*)<\/span>.*?pbancSn=(\d+)/')
 
-          # 3. 메시지 생성
+          # 4. 메시지 본문 구성
           FINAL_MSG=""
           while IFS=$'\t' read -r title dday sn; do
             if [[ ! -z "$title" ]]; then
-              # 개별 공고 상세 페이지 링크 생성
+              # 개별 상세페이지 링크 생성
               DETAIL_URL="https://www.k-startup.go.kr/web/contents/bizpbanc-ongoing.do?schMnuId=S010101&pbancSn=$sn"
               
               ITEM="### 📌 $title\n- 📅 **마감일**: \`$dday\`\n- 🔗 [상세공고 바로가기]($DETAIL_URL)\n"
@@ -41,16 +41,16 @@ jobs:
             fi
           done <<< "$RAW_LIST"
 
-          # 4. 최종 결과 조립
+          # 5. 최종 메시지 조립 및 전송
           DATE=$(date +'%Y-%m-%d')
           if [ -z "$FINAL_MSG" ]; then
-            MESSAGE="📅 **$DATE 알림**\n요청하신 키워드(`$KEYWORDS`)에 해당하는 공고가 현재 없습니다."
+            MESSAGE="📅 **$DATE 알림**\n현재 키워드에 해당하는 모집 중인 공고가 없습니다."
           else
             HEADER="🚀 **$DATE 맞춤형 창업 지원 공고**\n\n"
             MESSAGE="${HEADER}${FINAL_MSG}"
           fi
 
-          # 5. 디스코드 전송 (jq를 활용하여 \n 글자 오류 완벽 차단)
+          # jq를 사용하여 JSON 이스케이프를 처리함으로써 \n 글자 노출 에러 차단
           jq -n --arg msg "$MESSAGE" '{content: $msg}' | \
           curl -X POST "$DISCORD_WEBHOOK" \
                -H "Content-Type: application/json" \

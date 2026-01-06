@@ -1,4 +1,4 @@
-name: K-Startup Final Precision Alert
+name: K-Startup Date Fix Alert
 
 on:
   schedule:
@@ -44,37 +44,34 @@ jobs:
               res = requests.get(url, headers=headers, timeout=30, verify=False)
               soup = BeautifulSoup(res.text, 'html.parser')
               
-              # 카드형 리스트 아이템 추출
-              posts = soup.select('div.pbancList > ul > li') or soup.select('ul.list_type_common > li')
+              # 각 공고 카드(li 태그)를 모두 가져옴
+              posts = soup.select('div.pbancList > ul > li')
               
               keywords = ['예비창업패키지', '초기창업패키지', '창업도약패키지', '창업패키지', '청년창업사관학교']
               found_items = []
 
               for post in posts:
-                  # 1. 제목 추출 및 정제
-                  title_tag = post.find('a')
+                  # 제목 태그 찾기
+                  title_tag = post.find('h4') or post.find('strong') or post.find('a')
                   if not title_tag: continue
+                  
                   raw_title = title_tag.get_text(strip=True)
-                  # '새로운게시글', '새창열기' 및 아이콘 텍스트 제거
+                  # 불필요한 문구(새로운게시글, N, NEW 등) 제거
                   clean_title = re.sub(r'(새로운게시글|새창열기|N$|NEW$)', '', raw_title).strip()
                   
                   if any(k in clean_title for k in keywords):
-                      # 2. 마감일자 정밀 추출
-                      # 스크린샷의 '마감일자 2026-01-27' 패턴을 찾음
-                      full_text = post.get_text(' ', strip=True)
-                      # '마감일자' 단어 뒤에 오는 날짜(YYYY-MM-DD)를 특정해서 추출
-                      date_match = re.search(r'마감일자\s*(\d{4}-\d{2}-\d{2})', full_text)
+                      # 마감일자 추출 로직 (가장 중요)
+                      # '마감일자' 텍스트 뒤에 오는 YYYY-MM-DD 형식을 정확히 조준
+                      post_text = post.get_text(' ', strip=True)
+                      date_match = re.search(r'마감일자\s*(\d{4}-\d{2}-\d{2})', post_text)
                       
                       if date_match:
-                          date_val = date_match.group(1) # 찾은 날짜 그대로 사용
+                          actual_date = date_match.group(1) # 실제 사이트의 마감일자
                       else:
-                          # 패턴이 안 보일 경우 일반 날짜 형식이라도 검색
-                          simple_match = re.search(r'(\d{4}-\d{2}-\d{2})', full_text)
-                          date_val = simple_match.group(0) if simple_match else '기간상세참조'
+                          actual_date = '상세공고 참조'
                       
-                      found_items.append({'title': clean_title, 'date': date_val})
+                      found_items.append({'title': clean_title, 'date': actual_date})
 
-              # 3. 메시지 조립
               today = datetime.date.today().strftime('%Y-%m-%d')
               
               if not found_items:
@@ -90,5 +87,5 @@ jobs:
               send_discord(message)
 
           except Exception as e:
-              send_discord(f'⚠️ 스크립트 에러 발생: {str(e)}')
+              send_discord(f'⚠️ 에러 발생: {str(e)}')
           "

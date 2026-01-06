@@ -1,8 +1,8 @@
-name: K-Startup Daily Custom Alert
+name: K-Startup Precise Alert
 
 on:
   schedule:
-    - cron: '0 0 * * *' # 한국 시간 오전 9시 (UTC 00:00)
+    - cron: '0 0 * * *' # 한국 시간 오전 9시
   workflow_dispatch:
 
 jobs:
@@ -16,40 +16,41 @@ jobs:
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
-          # 1. 데이터 가져오기
-          URL="https://www.k-startup.go.kr/web/contents/bizpbanc-ongoing.do"
-          PAGE_DATA=$(curl -s -k -L -A "Mozilla/5.0" "$URL")
+          # 1. 데이터 수집 (차단 방지를 위해 브라우저처럼 위장)
+          LIST_URL="https://www.k-startup.go.kr/web/contents/bizpbanc-ongoing.do"
+          PAGE_DATA=$(curl -s -k -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36" "$LIST_URL")
 
-          # 2. 키워드 설정 및 데이터 추출
+          # 2. 키워드 필터링 및 데이터 추출 (제목, 마감일, 상세번호 추출)
+          # K-Startup은 pbancSn이라는 고유번호로 상세페이지 링크를 만듭니다.
           KEYWORDS="예비창업패키지|초기창업패키지|창업도약패키지|창업패키지|청년창업사관학교"
           
-          # 제목과 날짜를 짝지어 추출 (데이터가 없으면 아무것도 출력 안함)
-          RAW_DATA=$(echo "$PAGE_DATA" | grep -oP "title=\"[^\"]*($KEYWORDS)[^\"]*\"|<span>~ '[0-9]{2}\.[0-9]{2}\.[0-9]{2}\." | sed "s/title=\"//;s/\"//;s/<span>//")
+          # 제목, 마감일, 상세번호를 탭(\t)으로 구분하여 한 줄씩 정리
+          RAW_LIST=$(echo "$PAGE_DATA" | grep -zPo '(?s)<li class="item">.*?</li>' | tr -d '\n' | sed 's/<\/li>/\n/g' | \
+          grep -E "$KEYWORDS" | \
+          perl -lne 'print "$1\t$2\t$3" if /title="([^"]*)".*?<span>~ ([^<]*)<\/span>.*?pbancSn=(\d+)/')
 
-          # 3. 메시지 본문 생성
-          FINAL_CONTENT=""
-          while read -r title; do
-            read -r dday || break # 제목은 있는데 날짜가 없으면 중단
-            if [[ ! -z "$title" && "$title" != "목록" ]]; then
-              ITEM="### 📌 $title\n- 📅 **마감일**: \`$dday\`\n- 🔗 [공고 상세보기]($URL)\n\n"
-              FINAL_CONTENT="${FINAL_CONTENT}${ITEM}"
+          # 3. 메시지 생성
+          FINAL_MSG=""
+          while IFS=$'\t' read -r title dday sn; do
+            if [[ ! -z "$title" ]]; then
+              # 개별 공고 상세 페이지 링크 생성
+              DETAIL_URL="https://www.k-startup.go.kr/web/contents/bizpbanc-ongoing.do?schMnuId=S010101&pbancSn=$sn"
+              
+              ITEM="### 📌 $title\n- 📅 **마감일**: \`$dday\`\n- 🔗 [상세공고 바로가기]($DETAIL_URL)\n"
+              FINAL_MSG="${FINAL_MSG}${ITEM}━━━━━━━━━━━━━━━━━━\n"
             fi
-          done <<< "$RAW_DATA"
+          done <<< "$RAW_LIST"
 
-          # 4. 최종 메시지 조립
+          # 4. 최종 결과 조립
           DATE=$(date +'%Y-%m-%d')
-          if [ -z "$FINAL_CONTENT" ]; then
-            # 내용이 없을 때
-            MESSAGE="📅 **$DATE 알림**\n\n현재 모집 중인 관련 핵심 패키지 공고가 없습니다."
+          if [ -z "$FINAL_MSG" ]; then
+            MESSAGE="📅 **$DATE 알림**\n요청하신 키워드(`$KEYWORDS`)에 해당하는 공고가 현재 없습니다."
           else
-            # 내용이 있을 때
-            HEADER="🚀 **$DATE 맞춤형 창업 지원 공고**\n"
-            DIVIDER="━━━━━━━━━━━━━━━━━━\n\n"
-            MESSAGE="${HEADER}${DIVIDER}${FINAL_CONTENT}"
+            HEADER="🚀 **$DATE 맞춤형 창업 지원 공고**\n\n"
+            MESSAGE="${HEADER}${FINAL_MSG}"
           fi
 
-          # 5. 전송 (jq를 사용하여 JSON 이스케이프 완벽 처리)
-          # -n: 입력 없이 실행, --arg: 변수 안전하게 할당
+          # 5. 디스코드 전송 (jq를 활용하여 \n 글자 오류 완벽 차단)
           jq -n --arg msg "$MESSAGE" '{content: $msg}' | \
           curl -X POST "$DISCORD_WEBHOOK" \
                -H "Content-Type: application/json" \

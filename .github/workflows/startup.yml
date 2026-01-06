@@ -2,7 +2,7 @@ name: K-Startup Daily Custom Alert
 
 on:
   schedule:
-    - cron: '0 0 * * *' # 한국 시간 오전 9시
+    - cron: '0 0 * * *' # 한국 시간 오전 9시 (UTC 00:00)
   workflow_dispatch:
 
 jobs:
@@ -20,36 +20,37 @@ jobs:
           URL="https://www.k-startup.go.kr/web/contents/bizpbanc-ongoing.do"
           PAGE_DATA=$(curl -s -k -L -A "Mozilla/5.0" "$URL")
 
-          # 2. 키워드 필터링 및 데이터 추출
+          # 2. 키워드 설정 및 데이터 추출
           KEYWORDS="예비창업패키지|초기창업패키지|창업도약패키지|창업패키지|청년창업사관학교"
           
-          # 제목과 날짜 정보를 한 쌍으로 추출하여 줄바꿈 정리
+          # 제목과 날짜를 짝지어 추출 (데이터가 없으면 아무것도 출력 안함)
           RAW_DATA=$(echo "$PAGE_DATA" | grep -oP "title=\"[^\"]*($KEYWORDS)[^\"]*\"|<span>~ '[0-9]{2}\.[0-9]{2}\.[0-9]{2}\." | sed "s/title=\"//;s/\"//;s/<span>//")
 
           # 3. 메시지 본문 생성
           FINAL_CONTENT=""
           while read -r title; do
-            read -r dday
-            if [[ ! -z "$title" && ! -z "$dday" ]]; then
-              # 항목별 가독성 높은 레이아웃 구성
+            read -r dday || break # 제목은 있는데 날짜가 없으면 중단
+            if [[ ! -z "$title" && "$title" != "목록" ]]; then
               ITEM="### 📌 $title\n- 📅 **마감일**: \`$dday\`\n- 🔗 [공고 상세보기]($URL)\n\n"
               FINAL_CONTENT="${FINAL_CONTENT}${ITEM}"
             fi
           done <<< "$RAW_DATA"
 
-          # 4. 최종 메시지 조립 (줄바꿈 오류 방지)
+          # 4. 최종 메시지 조립
           DATE=$(date +'%Y-%m-%d')
           if [ -z "$FINAL_CONTENT" ]; then
-            PAYLOAD_JSON=$(jq -n --arg msg "📅 **$DATE 알림**\n현재 모집 중인 핵심 패키지 공고가 없습니다." '{content: $msg}')
+            # 내용이 없을 때
+            MESSAGE="📅 **$DATE 알림**\n\n현재 모집 중인 관련 핵심 패키지 공고가 없습니다."
           else
+            # 내용이 있을 때
             HEADER="🚀 **$DATE 맞춤형 창업 지원 공고**\n"
             DIVIDER="━━━━━━━━━━━━━━━━━━\n\n"
-            FULL_MESSAGE="${HEADER}${DIVIDER}${FINAL_CONTENT}"
-            # jq를 사용하여 전체 메시지를 안전하게 JSON화
-            PAYLOAD_JSON=$(jq -n --arg msg "$FULL_MESSAGE" '{content: $msg}')
+            MESSAGE="${HEADER}${DIVIDER}${FINAL_CONTENT}"
           fi
 
-          # 5. 전송
+          # 5. 전송 (jq를 사용하여 JSON 이스케이프 완벽 처리)
+          # -n: 입력 없이 실행, --arg: 변수 안전하게 할당
+          jq -n --arg msg "$MESSAGE" '{content: $msg}' | \
           curl -X POST "$DISCORD_WEBHOOK" \
                -H "Content-Type: application/json" \
-               -d "$PAYLOAD_JSON"
+               -d @-
